@@ -8,7 +8,12 @@ import logging
 import logging.handlers
 import sys
 
-import terminal_velocity.urwid_ui as urwid_ui
+# Handle running from a local Git repo.
+try:
+    import terminal_velocity.urwid_ui as urwid_ui
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[0]))))
+    import terminal_velocity.urwid_ui as urwid_ui
 
 
 def main():
