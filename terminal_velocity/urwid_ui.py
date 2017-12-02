@@ -7,11 +7,12 @@ import subprocess
 import shlex
 import pipes
 import logging
-logger = logging.getLogger(__name__)
-
 import urwid
-import notebook
 
+from . import notebook
+
+
+logger = logging.getLogger(__name__)
 
 palette = [
     ("placeholder", "dark blue", "default"),

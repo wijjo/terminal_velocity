@@ -52,13 +52,13 @@ This module provides a simple brute force full text search implementation.
 Other modules could provide better search functions that could be plugged in.
 
 """
-import logging
-logger = logging.getLogger(__name__)
+
 import os
 import sys
+import logging
+import chardet  #pylint: disable=E0401
 
-import chardet
-
+LOGGER = logging.getLogger(__name__)    #pylint: disable=C0103
 
 def unicode_or_bust(raw_text):
     """Return the given raw text data decoded to unicode.
@@ -75,7 +75,7 @@ def unicode_or_bust(raw_text):
     for encoding in encodings:
         if encoding:  # getfilesystemencoding() may return None
             try:
-                decoded = unicode(raw_text, encoding=encoding)
+                decoded = raw_text.decode(encoding=encoding)
                 return decoded
             except UnicodeDecodeError:
                 pass
@@ -84,9 +84,8 @@ def unicode_or_bust(raw_text):
     encoding = chardet.detect(raw_text)["encoding"]
     if encoding and encoding not in encodings:
         try:
-            decoded = unicode(raw_text, encoding=encoding)
-            logger.debug("File decoded with chardet, encoding was {0}".format(
-                encoding))
+            decoded = raw_text.decode(encoding=encoding)
+            LOGGER.debug("File decoded with chardet, encoding was %s", encoding)
             return decoded
         except UnicodeDecodeError:
             pass
@@ -95,8 +94,8 @@ def unicode_or_bust(raw_text):
 
     # I've heard that decoding with cp1252 never fails, so try that last.
     try:
-        decoded = unicode(raw_text, encoding="cp1252")
-        logger.debug("File decoded with encoding cp1252")
+        decoded = raw_text.decode(encoding="cp1252")
+        LOGGER.debug("File decoded with encoding cp1252")
         return decoded
     except UnicodeDecodeError:
         pass
@@ -116,6 +115,7 @@ class NewNoteBookError(Error):
     """
     def __init__(self, value):
         self.value = value
+        Error.__init__("Error while creating a new notebook.")
 
     def __str__(self):
         return repr(self.value)
@@ -127,6 +127,7 @@ class NewNoteError(Error):
     """
     def __init__(self, value):
         self.value = value
+        Error.__init__("Error while creating a new note.")
 
     def __str__(self):
         return repr(self.value)
@@ -152,6 +153,7 @@ class DelNoteError(Error):
     """
     def __init__(self, value):
         self.value = value
+        Error.__init__("Error while deleting a note.")
 
     def __str__(self):
         return repr(self.value)
@@ -192,18 +194,19 @@ class PlainTextNote(object):
         # subdirs) if they don't exist.
         directory = os.path.split(self.abspath)[0]
         if not os.path.isdir(directory):
-            logger.debug(u"'{0} doesn't exist, creating it".format(directory))
+            LOGGER.debug("%s doesn't exist, creating it", directory)
             try:
                 os.makedirs(directory)
-            except os.error as e:
+            except os.error as exc:
                 raise NewNoteError(
-                        u"{0} could not be created: {1}".format(directory, e))
+                    "{0} could not be created: {1}".format(directory, exc))
 
         # Create an empty file if the file doesn't exist.
         open(self.abspath, 'a')
 
     @property
     def title(self):
+        """'title' property"""
         return self._title
 
     @title.setter
@@ -213,24 +216,27 @@ class PlainTextNote(object):
 
     @property
     def extension(self):
+        """'extension' property"""
         return self._extension
 
     @property
     def contents(self):
-        contents = unicode_or_bust(open(self.abspath, "r").read())
+        """'contents' property"""
+        contents = unicode_or_bust(open(self.abspath, "rb").read())
         if contents is None:
-            logger.error(
-                u"Could not decode file contents: {0}".format(self.abspath))
-            return u""
-        else:
-            return contents
+            LOGGER.error(
+                "Could not decode file contents: %s", self.abspath)
+            return ""
+        return contents
 
     @property
     def mtime(self):
+        """'mtime' property"""
         return os.path.getmtime(self.abspath)
 
     @property
     def abspath(self):
+        """'abspath' property"""
         return self._abspath
 
     def __eq__(self, other):
@@ -279,8 +285,9 @@ def brute_force_search(notebook, query):
 class PlainTextNoteBook(object):
     """A NoteBook that stores its notes as a directory of plain text files."""
 
+    #pylint: disable=R0913,R0912,R0914
     def __init__(self, path, extension, extensions,
-            search_function=brute_force_search, exclude=None):
+                 search_function=brute_force_search, exclude=None):
         """Make a new PlainTextNoteBook for the given path.
 
         If `path` does not exist it will be created (parent directories too).
@@ -312,22 +319,23 @@ class PlainTextNoteBook(object):
         self.extension = extension
         self.search_function = search_function
         self.exclude = exclude
-        if not self.exclude: self.exclude = []
+        if not self.exclude:
+            self.exclude = []
 
         self.extensions = []
-        for extension in extensions:
-            if not extension.startswith("."):
-                extension = "." + extension
-            self.extensions.append(extension)
+        for dot_extension in extensions:
+            if not dot_extension.startswith("."):
+                dot_extension = "." + dot_extension
+            self.extensions.append(dot_extension)
 
         # Create notebook_dir if it doesn't exist.
         if not os.path.isdir(self.path):
-            logger.debug(u"'{0} doesn't exist, creating it".format(self.path))
+            LOGGER.debug("%s doesn't exist, creating it", self.path)
             try:
                 os.makedirs(self.path)
-            except os.error as e:
+            except os.error as exc:
                 raise NewNoteBookError(
-                        u"{0} could not be created: {1}".format(self.path, e))
+                    "{0} could not be created: {1}".format(self.path, exc))
         else:
             # TODO: Check that self.path is a directory, if not raise.
             pass
@@ -358,16 +366,11 @@ class PlainTextNoteBook(object):
                 abspath = os.path.join(root, filename)
                 relpath = os.path.relpath(abspath, self.path)
                 relpath, ext = os.path.splitext(relpath)
-                unicode_relpath = unicode_or_bust(relpath)
-                if relpath is None:
-                    # The filename could not be decoded.
-                    logger.error(
-                            "Could not decode filename: {0}".format(relpath))
-                else:
-                    self.add_new(title=unicode_relpath, extension=ext)
+                self.add_new(title=relpath, extension=ext)
 
     @property
     def path(self):
+        """'path' property"""
         return self._path
 
     def search(self, query):
@@ -411,14 +414,14 @@ class PlainTextNoteBook(object):
         if not os.path.split(title)[1]:
             # Don't create notes with empty filenames.
             raise InvalidNoteTitleError(
-                    "Invalid note title: {0}".format(title))
+                "Invalid note title: {0}".format(title))
 
         # Check that we don't already have a note with the same title and
         # extension.
         for note in self._notes:
             if note.title == title and note.extension == extension:
                 raise NoteAlreadyExistsError(
-                        u"Note already in NoteBook: {0}".format(note.title))
+                    "Note already in NoteBook: {0}".format(note.title))
 
         # Ok, add the note.
         note = PlainTextNote(title, self, extension)
@@ -441,4 +444,4 @@ class PlainTextNoteBook(object):
         return self._notes.__reversed__()
 
     def __contains__(self, note):
-        return (note in self._notes)
+        return note in self._notes

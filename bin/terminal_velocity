@@ -1,134 +1,106 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 """A fast note-taking app for the UNIX terminal"""
 
-import argparse
-import ConfigParser
-import os
-import logging
-import logging.handlers
 import sys
+import os
+import subprocess
+import stat
 
-# Handle running from a local Git repo.
-try:
-    import terminal_velocity.urwid_ui as urwid_ui
-except ImportError:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[0]))))
-    import terminal_velocity.urwid_ui as urwid_ui
+#pylint: disable=W0122
 
+### Application configuration data
 
+PIP_DEPENDENCIES = ['urwid', 'chardet']
+
+### Application other data
+
+PROGRAM_NAME = os.path.basename(sys.argv[0])
+
+APP_CODE_TEMPLATE = '''\
+#!{python}
+import sys
+import os
+import {name}.main
 def main():
+    {name}.main.main()
+if __name__ == '__main__':
+    main()
+'''
 
-    # Parse the command-line option for the config file.
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-c", "--config", dest="config", action="store",
-            default="~/.tvrc",
-            help="the config file to use (default: %(default)s)")
-    args, remaining_argv = parser.parse_known_args()
+# Handle running from a normal installation and also from a local Git repo.
+try:
+    exec('import {} as main_module'.format(PROGRAM_NAME))
+except ModuleNotFoundError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[0]))))
+    exec('import {} as main_module'.format(PROGRAM_NAME))
 
-    # Parse the config file.
-    config_file = os.path.abspath(os.path.expanduser(args.config))
-    config = ConfigParser.SafeConfigParser()
-    config.read(config_file)
-    defaults = dict(config.items('DEFAULT'))
 
-    # Parse the rest of the command-line options.
-    description = __doc__
-    epilog = """
-the config file can be used to override the defaults for the optional
-arguments, example config file contents:
+def abort(message, retcode=1):
+    """Display an error message and abort."""
+    print('ERROR: {}'.format(message))
+    sys.exit(retcode)
 
-    [DEFAULT]
-    editor = vim
-    # The filename extension to use for new files.
-    extension = .txt
-    # The filename extensions to recognize in the notes dir.
-    extensions = .txt, .text, .md, .markdown, .mdown, .mdwn, .mkdn, .mkd, .rst
-    notes_dir = ~/Notes
 
-if there is no config file (or an argument is missing from the config file)
-the default default will be used"""
+def run_or_abort(*command_args):
+    """Run command and abort if an error occurs."""
+    result = subprocess.run(command_args)
+    if result.returncode != 0:
+        abort('Command failed with return code {}.'.format(result.returncode))
 
-    parser = argparse.ArgumentParser(description=description, epilog=epilog,
-            parents=[parser],
-            formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("-e", "--editor", dest="editor", action="store",
-        default=defaults.get("editor", os.getenv("EDITOR", "vim")),
-        help="the text editor to use (default: %(default)s)")
 
-    parser.add_argument("-x", "--extension", dest="extension", action="store",
-        default=defaults.get("extension", "txt"),
-        help="the filename extension for new notes (default: %(default)s)")
+def is_virtual_environment_needed():
+    """Check if a virtual environment is needed to satisfy dependencies."""
+    for dependency in PIP_DEPENDENCIES:
+        try:
+            exec('import {}'.format(dependency))
+        except ModuleNotFoundError:
+            return True
+    return False
 
-    parser.add_argument("--extensions", dest="extensions", action="store",
-        default=defaults.get("extensions",
-            ".txt, .text, .md, .markdown, .mdown, .mdwn, .mkdn, .mkd, .rst"),
-        help="the filename extensions to recognize in the notes dir, a "
-            "comma-separated list (default: %(default)s)")
 
-    parser.add_argument("--exclude", dest="exclude", action="store",
-        default=defaults.get("exclude",
-            "src, backup, ignore, tmp, old"),
-        help="the file/directory names to skip while recursively searching "
-            "the notes dir for notes, a comma-separated list "
-            "(default: %(default)s)")
+def execute_virtual_environment():
+    """Build and invoke virtual environment if there are dependencies."""
 
-    parser.add_argument("-d", "--debug", dest="debug", action="store_true",
-        default=defaults.get("debug", False),
-        help="debug logging on or off (default: off)")
+    root_dir = os.path.join(os.path.expanduser('~'), '.{}'.format(PROGRAM_NAME), 'venv')
 
-    parser.add_argument("-l", "--log-file", dest="log_file", action="store",
-        default=defaults.get("log_file", "~/.tvlog"),
-        help="the file to log to (default: %(default)s)")
+    # Avoid redundantly running pip, etc. if the app script is present.
+    script_path = os.path.join(root_dir, 'bin', PROGRAM_NAME)
+    if not os.path.exists(script_path):
 
-    parser.add_argument("-p", "--print-config", dest="print_config",
-            action="store_true", default=False,
-            help="print your configuration settings then exit")
+        # Create the virtual environment itself?
+        if not os.path.exists(root_dir):
+            run_or_abort('virtualenv', root_dir)
 
-    parser.add_argument("notes_dir", action="store", nargs="?",
-        default=defaults.get("notes_dir", "~/Notes"),
-        help="the notes directory to use (default: %(default)s)")
+        # Pip-install library dependencies?
+        if PIP_DEPENDENCIES:
+            run_or_abort(os.path.join(root_dir, 'bin', 'pip3'), 'install', *PIP_DEPENDENCIES)
 
-    args = parser.parse_args()
+        # Generate the front end application script?
+        if not os.path.exists(script_path):
+            with open(script_path, 'w') as prog_fp:
+                prog_fp.write(APP_CODE_TEMPLATE.format(
+                    python=os.path.join(root_dir, 'bin', 'python3'),
+                    name=PROGRAM_NAME))
+            os.chmod(script_path, os.stat(script_path).st_mode | stat.S_IEXEC)
 
-    extensions = []
-    for extension in args.extensions.split(","):
-        extensions.append(extension.strip())
-    args.extensions = extensions
+        # The application library directory?
+        python_name = 'python{}.{}'.format(sys.version_info.major, sys.version_info.minor)
+        app_lib_dir = os.path.join(root_dir, 'lib', python_name, 'site-packages', PROGRAM_NAME)
+        if not os.path.exists(app_lib_dir):
+            os.symlink(os.path.dirname(main_module.__file__), app_lib_dir)  #pylint: disable=E0602
 
-    exclude = []
-    for name in args.exclude.split(","):
-        exclude.append(name.strip())
-    args.exclude = exclude
+    # Invoke the virtual environment application script.
+    os.execlp(script_path, script_path, *sys.argv[1:])
 
-    if args.print_config:
-        print args
-        sys.exit()
 
-    logger = logging.getLogger("terminal_velocity")
-    # Send all messages to handlers, let them decide.
-    logger.setLevel(logging.DEBUG)
-    fh = logging.handlers.RotatingFileHandler(
-                os.path.abspath(os.path.expanduser(args.log_file)),
-                maxBytes=1000000,  # 1 megabyte.
-                backupCount=0)
-    if args.debug:
-        fh.setLevel(logging.DEBUG)
-    else:
-        fh.setLevel(logging.WARNING)
-    logger.addHandler(fh)
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setLevel(logging.CRITICAL)
-    logger.addHandler(sh)
+def _main():
+    # Check if dependencies require a virtual environment and build one and use
+    # it as needed. Does not return if using a virtual environment.
+    if is_virtual_environment_needed():
+        execute_virtual_environment()
+    # Invoke the main program.
+    main_module.main()  #pylint: disable=E0602
 
-    logger.debug(args)
-
-    try:
-        urwid_ui.launch(notes_dir=args.notes_dir, editor=args.editor,
-                extension=args.extension, extensions=args.extensions,
-                exclude=args.exclude)
-    except KeyboardInterrupt:
-        # Silence KeyboardInterrupt tracebacks on ctrl-c.
-        sys.exit()
 
 if __name__ == "__main__":
-    main()
+    _main()
